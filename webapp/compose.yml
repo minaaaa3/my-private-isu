@@ -6,7 +6,8 @@ services:
       - app
     volumes:
       - ./etc/nginx/conf.d:/etc/nginx/conf.d
-      - ./public:/public
+      - ./public:/var/www/html/public
+      - ./php:/var/www/html
     ports:
       - "80:80"
     networks:
@@ -15,7 +16,7 @@ services:
   app:
     build:
       # Go実装は golang/ PHP実装は php/ Python実装は python/ Node.js実装は node/ に変更
-      context: ruby/
+      context: php/
       dockerfile: Dockerfile
     depends_on:
       - mysql
@@ -40,8 +41,8 @@ services:
 
   mysql:
     image: mysql:8.4
+    platform: linux/amd64
     environment:
-      #- "TZ=Asia/Tokyo"
       - "MYSQL_ROOT_HOST=%"
       - "MYSQL_ROOT_PASSWORD=root"
     volumes:
