@@ -6,8 +6,7 @@ services:
       - app
     volumes:
       - ./etc/nginx/conf.d:/etc/nginx/conf.d
-      - ./public:/var/www/html/public
-      - ./php:/var/www/html
+      - ./public:/public
     ports:
       - "80:80"
     networks:
