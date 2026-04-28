@@ -209,10 +209,12 @@ function calculate_passhash($account_name, $password) {
     return digest("{$password}:{$salt}");
 }
 
-// --------
-
 $app->get('/initialize', function (Request $request, Response $response) {
     $this->get('helper')->db_initialize();
+    
+    // ベンチマーク毎に前回の画像をクリアする
+    exec('rm -rf /home/public/image/*');
+    
     return $response;
 });
 
@@ -383,10 +385,21 @@ $app->post('/', function (Request $request, Response $response) {
         $ps->execute([
           $me['id'],
           $mime,
-          file_get_contents($_FILES['file']['tmp_name']),
+          '', // 変更：DBの負荷を減らすためバイナリデータの代わりに空文字を保存
           $params['body'],
         ]);
         $pid = $db->lastInsertId();
+
+        $ext = '';
+        if ($mime === 'image/jpeg') $ext = 'jpg';
+        elseif ($mime === 'image/png') $ext = 'png';
+        elseif ($mime === 'image/gif') $ext = 'gif';
+
+        // 修正: docker-composeのボリュームマウント先(/home/public)に合わせる
+        $image_dir = '/home/public/image';
+        if (!is_dir($image_dir)) mkdir($image_dir, 0777, true);
+        move_uploaded_file($_FILES['file']['tmp_name'], $image_dir . '/' . $pid . '.' . $ext);
+
         return redirect($response, "/posts/{$pid}", 302);
     } else {
         $this->get('flash')->addMessage('notice', '画像が必須です');
@@ -404,6 +417,15 @@ $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $
     if (($args['ext'] == 'jpg' && $post['mime'] == 'image/jpeg') ||
         ($args['ext'] == 'png' && $post['mime'] == 'image/png') ||
         ($args['ext'] == 'gif' && $post['mime'] == 'image/gif')) {
+
+        // 初回アクセス時にNginxが配信できるようにファイルとして書き出す
+        $image_dir = '/home/public/image';
+        if (!is_dir($image_dir)) mkdir($image_dir, 0777, true);
+        $filepath = $image_dir . '/' . $args['id'] . '.' . $args['ext'];
+        if (!file_exists($filepath) && !empty($post['imgdata'])) {
+            file_put_contents($filepath, $post['imgdata']);
+        }
+
         $response->getBody()->write($post['imgdata']);
         return $response->withHeader('Content-Type', $post['mime']);
     }

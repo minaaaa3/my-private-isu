@@ -16,3 +16,11 @@ portal/tmp
 !/portal/log/.keep
 /portal/tmp
 .vagrant
+
+# すべてのディレクトリの画像を無視
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.svg
