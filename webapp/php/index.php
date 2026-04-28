@@ -131,32 +131,100 @@ $container->set('helper', function ($c) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
-            $posts = [];
+            if (empty($results)) {
+                return [];
+            }
+
+            $db = $this->db();
+
+            // 1. 投稿者のユーザーIDを集めて一括取得 (退会ユーザー判定のため)
+            $author_ids = [];
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
-
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
-                }
-                if (count($posts) >= POSTS_PER_PAGE) {
-                    break;
+                $author_ids[$post['user_id']] = true;
+            }
+            $users = [];
+            if (!empty($author_ids)) {
+                $in_clause = implode(',', array_fill(0, count($author_ids), '?'));
+                $ps = $db->prepare("SELECT * FROM `users` WHERE `id` IN ({$in_clause})");
+                $ps->execute(array_keys($author_ids));
+                foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $u) {
+                    $users[$u['id']] = $u;
                 }
             }
-            return $posts;
+
+            // 2. 有効な投稿を20件ピックアップする
+            $valid_posts = [];
+            foreach ($results as $post) {
+                if (isset($users[$post['user_id']]) && $users[$post['user_id']]['del_flg'] == 0) {
+                    $valid_posts[] = $post;
+                    // 上限に達したら終了
+                    if (count($valid_posts) >= POSTS_PER_PAGE) {
+                        break;
+                    }
+                }
+            }
+
+            if (empty($valid_posts)) {
+                return [];
+            }
+
+            // 3. ピックアップした対象の post_id だけでコメントを取得
+            $post_ids = [];
+            foreach ($valid_posts as $post) {
+                $post_ids[] = $post['id'];
+            }
+
+            $comments_by_post = [];
+            $comment_counts = [];
+            $comment_user_ids = [];
+
+            $ps_comment = $db->prepare('SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC' . ($all_comments ? '' : ' LIMIT 3'));
+            $ps_count = $db->prepare('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?');
+
+            foreach ($post_ids as $pid) {
+                // コメント数
+                $ps_count->execute([$pid]);
+                $comment_counts[$pid] = $ps_count->fetchColumn();
+
+                // コメント実体
+                $ps_comment->execute([$pid]);
+                $comments = $ps_comment->fetchAll(PDO::FETCH_ASSOC);
+                $comments_by_post[$pid] = $comments;
+
+                foreach ($comments as $c) {
+                    if (!isset($users[$c['user_id']])) {
+                        $comment_user_ids[$c['user_id']] = true;
+                    }
+                }
+            }
+
+            // 4. コメント投稿者のユーザー情報が不足していれば取得
+            if (!empty($comment_user_ids)) {
+                $in_clause = implode(',', array_fill(0, count($comment_user_ids), '?'));
+                $ps = $db->prepare("SELECT * FROM `users` WHERE `id` IN ({$in_clause})");
+                $ps->execute(array_keys($comment_user_ids));
+                foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $u) {
+                    $users[$u['id']] = $u;
+                }
+            }
+
+            // 5. データの組み立て
+            $final_posts = [];
+            foreach ($valid_posts as $post) {
+                $post['user'] = $users[$post['user_id']];
+                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
+                
+                $comments = $comments_by_post[$post['id']] ?? [];
+                foreach ($comments as &$c) {
+                    $c['user'] = $users[$c['user_id']];
+                }
+                unset($c);
+                
+                $post['comments'] = array_reverse($comments);
+                $final_posts[] = $post;
+            }
+
+            return $final_posts;
         }
 
     };
